@@ -37,5 +37,14 @@ contextBridge.exposeInMainWorld("api", {
   updApply: () => call("upd:apply"),
   appVersion: () => call("app:version"),
   onUpdProgress: fn => ipcRenderer.on("upd-progress", (_e, m) => fn(m)),
+  remoteStatus: () => call("remote:status"),
+  remoteEnable: on => call("remote:enable", on),
+  remoteAutostart: on => call("remote:autostart", on),
+  remotePair: () => call("remote:pair"),
+  remoteRemoveDevice: id => call("remote:removeDevice", id),
+  libAddFolder: () => call("lib:addFolder"),
+  libRemoveFolder: f => call("lib:removeFolder", f),
+  library: () => call("lib:list"),
+  onRemoteChanged: fn => ipcRenderer.on("remote-changed", () => fn()),
   onOpenFile: fn => ipcRenderer.on("open-file", (_e, p) => fn(p))
 });

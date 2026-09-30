@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ДваРяда</title>
+<style>
+  :root { --bg:#0d1113; --panel:#151b1e; --line:#28323a; --fg:#e7ecec; --muted:#8c989d; --accent:#f2b233; --ink:#1b1403; --warn:#f08a6c; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px; line-height: 1.45;
+         display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+  .box { width: min(520px, 100%); display: flex; flex-direction: column; gap: 18px; }
+  .brand { font-weight: 700; font-size: 28px; letter-spacing: .01em; }
+  .brand span { background: var(--accent); color: var(--ink); border-radius: 6px; padding: 0 7px; margin-left: 3px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  h1 { margin: 0; font-size: 20px; font-weight: 600; }
+  ol { margin: 0; padding-left: 20px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+  ol b { color: var(--fg); font-weight: 600; }
+  .msg { color: var(--fg); }
+  .msg.err { color: var(--warn); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  button { font: inherit; border-radius: 10px; padding: 12px 18px; border: 1px solid var(--line); background: #1b2327; color: var(--fg); }
+  button.primary { background: var(--accent); color: var(--ink); border-color: var(--accent); font-weight: 600; }
+  .spin { width: 22px; height: 22px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: sp .8s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  .foot { color: var(--muted); font-size: 13px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="brand">ДваРяда<span>2</span></div>
+  <div class="card">
+    <div class="row" id="busy" hidden><span class="spin"></span><span id="busyText"></span></div>
+    <div id="intro">
+      <h1>Подключите планшет к ПК</h1>
+    </div>
+    <ol id="steps">
+      <li>На ПК откройте ДваРяда → <b>Настройки → Планшет</b>.</li>
+      <li>Включите <b>«Раздавать фильмы по домашней сети»</b> и нажмите <b>«Привязать планшет»</b>.</li>
+      <li>Нажмите кнопку ниже и наведите камеру на <b>правый</b> QR-код.</li>
+    </ol>
+    <div class="msg" id="msg" hidden></div>
+    <div class="row">
+      <button class="primary" id="scan">Сканировать QR-код</button>
+      <button id="retry" hidden>Подключиться снова</button>
+    </div>
+  </div>
+  <div class="foot" id="foot"></div>
+</div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const msg = q.get("m") || "", retry = q.get("r") === "1", busy = q.get("b") === "1", paired = q.get("p") === "1";
+  const $ = id => document.getElementById(id);
+  if (busy) { $("busy").hidden = false; $("busyText").textContent = msg; $("intro").hidden = true; $("steps").hidden = true; $("scan").hidden = true; }
+  else if (msg) { $("msg").hidden = false; $("msg").textContent = msg; $("msg").classList.toggle("err", retry || !paired); }
+  if (retry) { $("retry").hidden = false; $("intro").hidden = true; $("steps").hidden = true; $("scan").textContent = "Привязать заново"; }
+  $("scan").onclick = () => window.DvaRyadaApp && DvaRyadaApp.scan();
+  $("retry").onclick = () => window.DvaRyadaApp && DvaRyadaApp.retry();
+  $("foot").textContent = "Версия приложения " + (q.get("v") || "") + (q.get("pc") ? " · ПК: " + q.get("pc") : "");
+  // пока ПК не найден — пробуем снова каждые 15 секунд
+  if (retry) setTimeout(() => window.DvaRyadaApp && DvaRyadaApp.retry(), 15000);
+</script>
+</body>
+</html>

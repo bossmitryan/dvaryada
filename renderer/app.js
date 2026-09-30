@@ -1,6 +1,7 @@
 "use strict";
 (() => {
 const api = window.api;
+const REMOTE = !!api.isRemote;
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const store = {
@@ -769,18 +770,8 @@ function trackSec(i) {
     ${syncState[i] ? `<div class="hint">${esc(syncState[i])}</div>` : ""}
   </div>`;
 }
-function renderLook() {
-  const p = $("#pLook"); const sc = p.scrollTop;
-  const canAI = tracks.some(t => t.cues.length);
-  p.innerHTML = trackSec(0) + trackSec(1) + `
-  <div class="sec">
-    <h3>Порядок и поведение</h3>
-    <button class="btn sm" id="swap">Поменять ряды местами у края</button>
-    <label class="chk"><input type="checkbox" id="hp" ${S.hoverPause ? "checked" : ""}> Пауза, когда курсор над субтитрами</label>
-    <label class="chk"><input type="checkbox" id="pp" ${S.popPause ? "checked" : ""}> Пауза на время перевода слова</label>
-    <div class="fld"><span>Переводить на</span><select class="sel" id="lang">${["русский", "украинский", "английский", "немецкий", "испанский"].map(l => `<option${l === S.lang ? " selected" : ""}>${l}</option>`).join("")}</select><span></span></div>
-  </div>
-  <div class="sec">
+function keysSec() {
+  return `  <div class="sec">
     <h3>Переводчик</h3>
     <div class="seg"><button data-trp="google" aria-pressed="${CFG.translator !== "claude"}">Бесплатно</button><button data-trp="claude" aria-pressed="${CFG.translator === "claude"}">Claude · с учётом фразы</button></div>
     ${CFG.translator === "claude" ? `<div class="q"><input type="password" class="fldi" id="clKey" placeholder="${CFG.hasClaudeKey ? "ключ сохранён" : "API-ключ Anthropic (sk-ant-…)"}" style="flex:1"><button class="btn sm" id="clSave">Сохранить</button></div><div class="hint">Ключ создаётся на <a href="#" data-url="https://console.anthropic.com/settings/keys">console.anthropic.com</a>, запросы оплачиваются там же. Без ключа работает Google.</div>` : `<div class="hint">Бесплатно: Google, а если он недоступен — MyMemory. Claude объясняет смысл слова именно в этой фразе: идиомы, сленг, грамматику.</div>`}
@@ -797,6 +788,30 @@ function renderLook() {
     <div class="q"><button class="btn sm" id="osSave">Сохранить</button><button class="btn sm" id="osCheck">Проверить вход</button></div>
     <div class="hint">Ключ бесплатный: <a href="#" data-url="https://www.opensubtitles.com/ru/consumers">opensubtitles.com → API consumers</a>. Пароль хранится зашифрованным средствами Windows.</div>
   </div>
+`;
+}
+function updSec() {
+  return `  <div class="sec">
+    <h3>Обновление</h3>
+    <div class="hint">Версия ${esc(UPD.current || "…")}${UPD.latest && UPD.available ? ` · доступна <b style="color:var(--accent)">${esc(UPD.latest)}</b>` : UPD.latest ? " · последняя" : ""}</div>
+    ${UPD.notes && UPD.available ? `<div class="hint" style="white-space:pre-line">${esc(UPD.notes)}</div>` : ""}
+    <div class="toolbar" style="margin:0">${UPD.available ? `<button class="btn sm primary" id="updGo" ${UPD.busy ? "disabled" : ""}>${UPD.busy ? "Обновляю…" : "Обновить и перезапустить"}</button>` : `<button class="btn sm" id="updCheck" ${UPD.busy ? "disabled" : ""}>Проверить обновления</button>`}</div>
+    ${UPD.msg ? `<div class="hint" id="updMsg">${esc(UPD.msg)}</div>` : ""}
+  </div>
+`;
+}
+function renderLook() {
+  const p = $("#pLook"); const sc = p.scrollTop;
+  const canAI = tracks.some(t => t.cues.length);
+  p.innerHTML = trackSec(0) + trackSec(1) + `
+  <div class="sec">
+    <h3>Порядок и поведение</h3>
+    <button class="btn sm" id="swap">Поменять ряды местами у края</button>
+    ${REMOTE ? "" : `<label class="chk"><input type="checkbox" id="hp" ${S.hoverPause ? "checked" : ""}> Пауза, когда курсор над субтитрами</label>`}
+    <label class="chk"><input type="checkbox" id="pp" ${S.popPause ? "checked" : ""}> Пауза на время перевода слова</label>
+    <div class="fld"><span>Переводить на</span><select class="sel" id="lang">${["русский", "украинский", "английский", "немецкий", "испанский"].map(l => `<option${l === S.lang ? " selected" : ""}>${l}</option>`).join("")}</select><span></span></div>
+  </div>
+  ${REMOTE ? `<div class="sec"><h3>Поиск и перевод</h3><div class="hint">Ключи SubDL, OpenSubtitles и Claude хранятся на ПК, планшет пользуется ими через ПК.</div></div>` : keysSec()}
   <div class="sec">
     <h3>Перевести ряд 1 → 2</h3>
     <div class="hint">Если нужного языка нет, переводчик сделает второй ряд с теми же таймингами.</div>
@@ -804,13 +819,7 @@ function renderLook() {
     <div class="toolbar" style="margin:0"><button class="btn sm primary" id="aiGo" ${canAI && !aiJob ? "" : "disabled"}>${aiJob ? "Перевожу…" : "Перевести"}</button>${aiJob ? `<button class="btn sm" id="aiStop">Стоп</button>` : ""}</div>
     ${aiJob ? `<div class="bar"><i id="aiBar" style="width:${aiJob.pct}%"></i></div><div class="hint" id="aiTxt">${aiJob.done} из ${aiJob.total}</div>` : ""}
   </div>
-  <div class="sec">
-    <h3>Обновление</h3>
-    <div class="hint">Версия ${esc(UPD.current || "…")}${UPD.latest && UPD.available ? ` · доступна <b style="color:var(--accent)">${esc(UPD.latest)}</b>` : UPD.latest ? " · последняя" : ""}</div>
-    ${UPD.notes && UPD.available ? `<div class="hint" style="white-space:pre-line">${esc(UPD.notes)}</div>` : ""}
-    <div class="toolbar" style="margin:0">${UPD.available ? `<button class="btn sm primary" id="updGo" ${UPD.busy ? "disabled" : ""}>${UPD.busy ? "Обновляю…" : "Обновить и перезапустить"}</button>` : `<button class="btn sm" id="updCheck" ${UPD.busy ? "disabled" : ""}>Проверить обновления</button>`}</div>
-    ${UPD.msg ? `<div class="hint" id="updMsg">${esc(UPD.msg)}</div>` : ""}
-  </div>
+  ${REMOTE ? tabletAppSec() : updSec() + tabletPcSec()}
   <div class="sec">
     <h3>Клавиши</h3>
     <div class="keys"><kbd>Пробел</kbd><span>пуск / пауза</span><kbd>← →</kbd><span>±5 секунд</span><kbd>A / D</kbd><span>предыдущая / следующая фраза</span><kbd>S</kbd><span>повторить фразу</span><kbd>1 / 2</kbd><span>скрыть / показать ряд</span><kbd>C</kbd><span>сменить субтитры и озвучку</span><kbd>F</kbd><span>во весь экран</span></div>
@@ -837,6 +846,8 @@ pl.addEventListener("change", e => {
   else if (id === "hp") upd(() => S.hoverPause = e.target.checked, false);
   else if (id === "pp") upd(() => S.popPause = e.target.checked, false);
   else if (id === "lang") upd(() => S.lang = e.target.value, false);
+  else if (id === "rsOn") api.remoteEnable(e.target.checked).then(r => { RS = r; renderLook(); if (r.enabled && !r.running) toast("Не удалось запустить раздачу"); }).catch(err => { toast(err.message); refreshRemote(); });
+  else if (id === "rsAuto") api.remoteAutostart(e.target.checked).then(r => { RS = r; renderLook(); });
 });
 pl.addEventListener("click", async e => {
   const a = e.target.closest("[data-url]"); if (a) { e.preventDefault(); api.openUrl(a.dataset.url); return; }
@@ -859,6 +870,12 @@ pl.addEventListener("click", async e => {
     else toast("Сохранено");
     renderLook();
   }
+  else if (b.id === "rsAddFolder") { RS = await api.libAddFolder(); renderLook(); }
+  else if (b.dataset.rmfolder) { RS = await api.libRemoveFolder(b.dataset.rmfolder); renderLook(); }
+  else if (b.dataset.rmdev) { RS = await api.remoteRemoveDevice(b.dataset.rmdev); renderLook(); }
+  else if (b.id === "rsPair") showPairing();
+  else if (b.id === "apkGet") api.openUrl(api.apkUrl());
+  else if (b.id === "rescanPc") window.DvaRyadaApp.scan();
   else if (b.id === "updCheck") checkUpdate(false);
   else if (b.id === "updGo") applyUpdate();
   else if (b.id === "swap") upd(() => S.order.reverse());
@@ -894,6 +911,83 @@ async function translateTrack() {
   aiJob = null; shown = [null, null]; renderTranscript(); renderLook(); save(); applyStyles();
 }
 
+/* ---------- планшет: раздача с ПК и библиотека ---------- */
+let RS = null; // состояние раздачи на ПК
+async function refreshRemote() { if (!api.remoteStatus) return; try { RS = await api.remoteStatus(); } catch {} renderLook(); }
+function tabletPcSec() {
+  if (!api.remoteStatus) return "";
+  if (!RS) return `<div class="sec"><h3>Планшет</h3><div class="hint">Загружаю…</div></div>`;
+  const ago = t => { if (!t) return "ещё не подключался"; const m = Math.round((Date.now() - t) / 60000); return m < 2 ? "на связи" : m < 60 ? `был ${m} мин назад` : `был ${new Date(t).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`; };
+  return `<div class="sec">
+    <h3>Планшет</h3>
+    <label class="chk"><input type="checkbox" id="rsOn" ${RS.enabled ? "checked" : ""}> Раздавать фильмы по домашней сети</label>
+    ${RS.enabled ? `<div class="hint">${RS.running ? `Работает: ${RS.addresses.map(a => esc(a) + ":" + RS.port).join(", ") || "нет сети"}` : `<span class="err">Не запущено</span>`}. Пока раздача включена, крестик прячет окно в трей (значок возле часов).</div>` : `<div class="hint">Включите, чтобы смотреть фильмы с этого ПК на планшете.</div>`}
+    <div class="hint" style="margin-top:4px"><b style="color:var(--fg)">Папки с фильмами</b></div>
+    ${RS.folders.length ? RS.folders.map(f => `<div class="fld" style="grid-template-columns:minmax(0,1fr) auto"><span style="color:var(--fg);word-break:break-all">${esc(f)}</span><button class="btn sm" data-rmfolder="${esc(f)}">Убрать</button></div>`).join("") : `<div class="hint">Пока ни одной.</div>`}
+    <div class="toolbar" style="margin:0"><button class="btn sm" id="rsAddFolder">Добавить папку</button>${RS.enabled ? `<button class="btn sm primary" id="rsPair">Привязать планшет</button>` : ""}</div>
+    ${RS.devices.length ? `<div class="hint" style="margin-top:4px"><b style="color:var(--fg)">Привязанные устройства</b></div>` + RS.devices.map(d => `<div class="fld" style="grid-template-columns:minmax(0,1fr) auto"><span style="color:var(--fg)">${esc(d.name)} <span class="hint">· ${ago(d.seen)}</span></span><button class="btn sm" data-rmdev="${esc(d.id)}">Отвязать</button></div>`).join("") : ""}
+    <label class="chk"><input type="checkbox" id="rsAuto" ${RS.autostart ? "checked" : ""}> Запускать вместе с Windows (в трей)</label>
+  </div>`;
+}
+function tabletAppSec() {
+  const nv = api.nativeVersion ? api.nativeVersion() : "";
+  return `<div class="sec">
+    <h3>Приложение на планшете</h3>
+    <div class="hint">Плеер ${esc(UPD.current || "")}${nv ? " · приложение " + esc(nv) : ""}. Плеер обновляется сам вместе с ПК.</div>
+    <div class="toolbar" style="margin:0"><button class="btn sm" id="apkGet">Скачать новую версию приложения</button>${window.DvaRyadaApp && window.DvaRyadaApp.scan ? `<button class="btn sm" id="rescanPc">Подключить другой ПК</button>` : ""}</div>
+  </div>`;
+}
+async function showPairing() {
+  let r;
+  try { r = await api.remotePair(); } catch (e) { return toast(e.message); }
+  document.querySelector(".pairmodal")?.remove();
+  const d = document.createElement("div"); d.className = "modal pairmodal";
+  d.innerHTML = `<div class="dlg" style="max-width:720px"><header><h2>Привязать планшет</h2></header>
+    <div class="body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:22px;padding:16px 18px">
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:center;text-align:center">
+        <b>1. Установите приложение</b>
+        ${r.apkQr ? `<img src="${r.apkQr}" alt="QR для скачивания приложения" style="width:200px;height:200px;border-radius:8px;background:#fff">` : ""}
+        <div class="hint">Наведите камеру планшета на код и скачайте файл. Или откройте в браузере планшета:<br><b style="color:var(--fg);user-select:all">${esc(r.apkUrl || "нет сети")}</b></div>
+        <div class="hint">Если планшет спросит, разрешите установку из этого источника.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:center;text-align:center">
+        <b>2. Отсканируйте из приложения</b>
+        <img src="${r.pairQr}" alt="QR для привязки" style="width:240px;height:240px;border-radius:8px;background:#fff">
+        <div class="hint">Код: <b style="color:var(--fg);font-family:var(--f-mono);font-size:16px;letter-spacing:.1em">${esc(r.code)}</b> · действует 10 минут</div>
+        <div class="hint">Адрес ПК: ${r.hosts.map(h => esc(h) + ":" + r.port).join(", ") || "нет сети"}</div>
+      </div>
+    </div>
+    <footer><div class="sum">Если планшет не видит ПК: Windows могла спросить про доступ к сети — нужно разрешить для частных сетей.</div><button class="btn primary" id="pairClose">Готово</button></footer></div>`;
+  document.body.append(d);
+  d.querySelector("#pairClose").onclick = () => { d.remove(); refreshRemote(); };
+}
+api.onRemoteChanged?.(() => { refreshRemote(); toast("Планшет привязан"); document.querySelector(".pairmodal")?.remove(); });
+
+async function showLibrary() {
+  if (!api.library || !REMOTE) return;
+  closePop(); video.pause();
+  const w = $("#welcome"); w.hidden = false; w.classList.add("libmode");
+  w.innerHTML = `<div class="lib"><div class="lib-head"><h2>Фильмы на ПК</h2><span class="sp"></span>${film ? `<button class="btn sm" id="libBack">Вернуться к фильму</button>` : ""}<button class="btn sm" id="libRefresh">Обновить список</button></div><div class="lib-grid" id="libGrid"><div class="hint">Загружаю список…</div></div></div>`;
+  const grid = w.querySelector("#libGrid");
+  w.querySelector("#libBack")?.addEventListener("click", () => { w.hidden = true; });
+  w.querySelector("#libRefresh").onclick = showLibrary;
+  let items;
+  try { items = await api.library(); } catch (e) { grid.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  if (!items.length) { grid.innerHTML = `<div class="hint">На ПК не выбрана папка с фильмами или она пуста. На ПК: «Настройки → Планшет → Добавить папку».</div>`; return; }
+  grid.innerHTML = items.map((it, i) => `<button class="card" data-i="${i}"><span class="poster"><img loading="lazy" src="${esc(api.thumbUrl(it.id))}" alt="" onerror="this.remove()"></span><span class="ct">${esc(it.title)}</span><span class="cm">${[it.year, it.season ? `S${it.season}E${it.episode}` : "", it.folder].filter(Boolean).map(esc).join(" · ")}</span></button>`).join("");
+  grid.onclick = e => { const c = e.target.closest(".card"); if (c) openFilm(items[+c.dataset.i].path); };
+}
+window.addEventListener("dr-library", showLibrary);
+// кнопка «Назад» на планшете: сначала закрываем открытое, потом — в библиотеку
+window.drBack = () => {
+  const lp = document.querySelector(".linepick"); if (lp) { lp.querySelector(".x").click(); return true; }
+  if (pop.open) { closePop(); return true; }
+  if (!$("#picker").hidden && film?.pickedOnce) { closePicker(); return true; }
+  if (document.body.classList.contains("fs")) { toggleFs(); return true; }
+  if (REMOTE && film && $("#welcome").hidden) { showLibrary(); return true; }
+  return false;
+};
+
 /* ---------- обновление ---------- */
 const UPD = { current: "", latest: "", available: false, notes: "", msg: "", busy: false };
 async function checkUpdate(quiet) {
@@ -923,6 +1017,13 @@ api.onUpdProgress?.(m => { UPD.msg = m; const el = $("#updMsg"); if (el) el.text
   new ResizeObserver(applyStyles).observe(stage);
   try { UPD.current = await api.appVersion(); } catch {}
   applyStyles(); renderTranscript(); renderLook(); renderDict(); syncPlayIcon(); loop();
-  setTimeout(() => checkUpdate(true), 4000);
+  if (!REMOTE) setTimeout(() => checkUpdate(true), 4000);
+  refreshRemote();
+  if (REMOTE) {
+    document.body.classList.add("remote");
+    $("#bOpen").lastChild.textContent = " Библиотека";
+    $("#bExport").hidden = true;
+    showLibrary();
+  }
 })();
 })();
