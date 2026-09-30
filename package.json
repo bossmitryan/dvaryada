@@ -1,0 +1,39 @@
+{
+  "name": "dvaryada",
+  "productName": "ДваРяда",
+  "version": "0.4.0",
+  "description": "Плеер с двойными субтитрами для изучения языков",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win portable nsis"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "ru.dvaryada.player",
+    "productName": "DvaRyada",
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
+      "node_modules/ffprobe-static/bin/${platform}/**"
+    ],
+    "files": [
+      "main.js", "preload.js", "icon.ico", "lib/**", "renderer/**", "package.json",
+      "node_modules/**",
+      "!node_modules/ffprobe-static/bin/darwin/**",
+      "!node_modules/ffprobe-static/bin/linux/**"
+    ],
+    "win": { "target": ["portable", "nsis"], "icon": "icon.ico" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
+    "fileAssociations": [
+      { "ext": ["mkv", "mp4", "avi", "webm", "mov", "m4v"], "name": "Video", "role": "Viewer" }
+    ]
+  }
+}
