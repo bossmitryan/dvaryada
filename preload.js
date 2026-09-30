@@ -33,5 +33,9 @@ contextBridge.exposeInMainWorld("api", {
   openUrl: url => call("shell:open", url),
   toggleFullscreen: () => call("win:fullscreen"),
   onFullscreen: fn => ipcRenderer.on("fs", (_e, on) => fn(on)),
+  updCheck: () => call("upd:check"),
+  updApply: () => call("upd:apply"),
+  appVersion: () => call("app:version"),
+  onUpdProgress: fn => ipcRenderer.on("upd-progress", (_e, m) => fn(m)),
   onOpenFile: fn => ipcRenderer.on("open-file", (_e, p) => fn(p))
 });

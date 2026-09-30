@@ -9,6 +9,7 @@ const { OpenSubs } = require("./lib/opensubs");
 const { SubDL } = require("./lib/subdl");
 const tr = require("./lib/translate");
 const sync = require("./lib/sync");
+const updater = require("./lib/update");
 
 /* ---------- настройки (userData/settings.json, секреты шифруются средствами ОС) ---------- */
 const SETTINGS_FILE = () => path.join(app.getPath("userData"), "settings.json");
@@ -161,5 +162,16 @@ ipcMain.handle("save:text", wrap(async (name, text) => {
   if (r.canceled || !r.filePath) return null;
   fs.writeFileSync(r.filePath, text); return r.filePath;
 }));
+ipcMain.handle("upd:check", wrap(async () => {
+  if (app.isPackaged) throw new Error("Эта сборка обновляется заново через build.bat");
+  return updater.check(__dirname);
+}));
+ipcMain.handle("upd:apply", wrap(async () => {
+  if (app.isPackaged) throw new Error("Эта сборка обновляется заново через build.bat");
+  const r = await updater.apply(__dirname, msg => win && win.webContents.send("upd-progress", msg));
+  if (r.applied) setTimeout(() => { app.relaunch(); app.exit(0); }, 800);
+  return r;
+}));
+ipcMain.handle("app:version", wrap(async () => require("./package.json").version));
 ipcMain.handle("shell:open", wrap(async url => { if (/^https?:\/\//.test(url)) await shell.openExternal(url); return true; }));
 ipcMain.handle("win:fullscreen", wrap(async () => { win.setFullScreen(!win.isFullScreen()); return win.isFullScreen(); }));

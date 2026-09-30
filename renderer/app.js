@@ -805,6 +805,13 @@ function renderLook() {
     ${aiJob ? `<div class="bar"><i id="aiBar" style="width:${aiJob.pct}%"></i></div><div class="hint" id="aiTxt">${aiJob.done} из ${aiJob.total}</div>` : ""}
   </div>
   <div class="sec">
+    <h3>Обновление</h3>
+    <div class="hint">Версия ${esc(UPD.current || "…")}${UPD.latest && UPD.available ? ` · доступна <b style="color:var(--accent)">${esc(UPD.latest)}</b>` : UPD.latest ? " · последняя" : ""}</div>
+    ${UPD.notes && UPD.available ? `<div class="hint" style="white-space:pre-line">${esc(UPD.notes)}</div>` : ""}
+    <div class="toolbar" style="margin:0">${UPD.available ? `<button class="btn sm primary" id="updGo" ${UPD.busy ? "disabled" : ""}>${UPD.busy ? "Обновляю…" : "Обновить и перезапустить"}</button>` : `<button class="btn sm" id="updCheck" ${UPD.busy ? "disabled" : ""}>Проверить обновления</button>`}</div>
+    ${UPD.msg ? `<div class="hint" id="updMsg">${esc(UPD.msg)}</div>` : ""}
+  </div>
+  <div class="sec">
     <h3>Клавиши</h3>
     <div class="keys"><kbd>Пробел</kbd><span>пуск / пауза</span><kbd>← →</kbd><span>±5 секунд</span><kbd>A / D</kbd><span>предыдущая / следующая фраза</span><kbd>S</kbd><span>повторить фразу</span><kbd>1 / 2</kbd><span>скрыть / показать ряд</span><kbd>C</kbd><span>сменить субтитры и озвучку</span><kbd>F</kbd><span>во весь экран</span></div>
   </div>
@@ -852,6 +859,8 @@ pl.addEventListener("click", async e => {
     else toast("Сохранено");
     renderLook();
   }
+  else if (b.id === "updCheck") checkUpdate(false);
+  else if (b.id === "updGo") applyUpdate();
   else if (b.id === "swap") upd(() => S.order.reverse());
   else if (b.id === "reset") upd(() => { const keep = { hoverPause: S.hoverPause, popPause: S.popPause, lang: S.lang, rate: S.rate, vol: S.vol }; S = Object.assign(structuredClone(DEFAULTS), keep); });
   else if (b.id === "aiGo") translateTrack();
@@ -885,11 +894,35 @@ async function translateTrack() {
   aiJob = null; shown = [null, null]; renderTranscript(); renderLook(); save(); applyStyles();
 }
 
+/* ---------- обновление ---------- */
+const UPD = { current: "", latest: "", available: false, notes: "", msg: "", busy: false };
+async function checkUpdate(quiet) {
+  UPD.busy = true; UPD.msg = quiet ? "" : "Проверяю…"; renderLook();
+  try {
+    const r = await api.updCheck();
+    Object.assign(UPD, { current: r.current, latest: r.latest, available: r.available, notes: r.notes, msg: r.available ? "" : (quiet ? "" : "У вас последняя версия") });
+    const hb = $("#bUpd"); if (hb) { hb.hidden = !r.available; hb.textContent = "Обновить до " + r.latest; }
+  } catch (e) { UPD.msg = quiet ? "" : e.message; }
+  UPD.busy = false; renderLook();
+}
+async function applyUpdate() {
+  UPD.busy = true; UPD.msg = "Начинаю…"; renderLook();
+  try {
+    const r = await api.updApply();
+    UPD.msg = r.applied ? `Готово: обновлено файлов — ${r.files}. Перезапускаю…` : "Обновлять нечего";
+  } catch (e) { UPD.msg = "Не получилось: " + e.message; UPD.busy = false; }
+  renderLook();
+}
+$("#bUpd").onclick = () => { document.querySelector('.tabs [data-tab="look"]').click(); applyUpdate(); };
+api.onUpdProgress?.(m => { UPD.msg = m; const el = $("#updMsg"); if (el) el.textContent = m; else renderLook(); });
+
 /* ---------- запуск ---------- */
 (async () => {
   try { CFG = await api.getCfg(); } catch {}
   $("#welcomeHint").innerHTML = (CFG.hasSubdlKey || CFG.osApiKey) ? "" : `Чтобы субтитры находились сами, добавьте бесплатный ключ SubDL — плеер попросит его при открытии фильма.`;
   new ResizeObserver(applyStyles).observe(stage);
+  try { UPD.current = await api.appVersion(); } catch {}
   applyStyles(); renderTranscript(); renderLook(); renderDict(); syncPlayIcon(); loop();
+  setTimeout(() => checkUpdate(true), 4000);
 })();
 })();
