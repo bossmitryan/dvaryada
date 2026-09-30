@@ -8,6 +8,7 @@ const server = require("./lib/server");
 const { OpenSubs } = require("./lib/opensubs");
 const { SubDL } = require("./lib/subdl");
 const tr = require("./lib/translate");
+const sync = require("./lib/sync");
 
 /* ---------- настройки (userData/settings.json, секреты шифруются средствами ОС) ---------- */
 const SETTINGS_FILE = () => path.join(app.getPath("userData"), "settings.json");
@@ -102,6 +103,9 @@ ipcMain.handle("media:open", wrap(async file => {
   return { ...info, name: path.basename(file), fileUrl: `http://127.0.0.1:${port}/file/${id}`, streamUrl: `http://127.0.0.1:${port}/stream/${id}` };
 }));
 ipcMain.handle("media:hash", wrap(file => movieHash(file)));
+ipcMain.handle("sync:warm", wrap(async (file, audioN) => { sync.speechFeature(file, audioN).catch(() => {}); return true; }));
+ipcMain.handle("sync:audio", wrap((file, audioN, cues) => sync.alignToAudio(file, audioN, cues)));
+ipcMain.handle("sync:cues", wrap(async (ref, cues) => sync.alignToCues(ref, cues)));
 ipcMain.handle("media:seekPlan", wrap(async (file, t, copyVideo) => {
   if (t <= 0.3) return { ss: 0, offset: 0 };
   if (!copyVideo) return { ss: t, offset: t };

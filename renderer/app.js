@@ -236,6 +236,7 @@ async function openFilm(p) {
     pk.audioN = audioN;
     pk.embStatus = "done"; autoPick(); renderPicker();
     startPlayback(0, f.pickedOnce);
+    if (info.audio.length) api.syncWarm(p, audioN).catch(() => {});
   }).catch(e => { if (film !== f) return; pk.embStatus = "error"; pk.embErr = e.message; renderPicker(); showMsg("Не удалось открыть файл: " + e.message); });
   api.siblingSubs(p).then(list => { if (film !== f) return; pk.side = list; autoPick(); renderPicker(); }).catch(() => {});
   f.hashP = api.hash(p).catch(() => null);
@@ -516,6 +517,7 @@ async function loadCandidate(key) {
 }
 function setTrack(slot, key, name, cues, lang = "") {
   tracks[slot] = { key, name, cues, lang };
+  syncState[slot] = "";
   S.t[slot].delay = 0; save();
   shown = [null, null]; renderTranscript(); renderLook(); tick(true);
 }
@@ -523,6 +525,7 @@ $("#pkOk").onclick = async () => {
   if (!film || pk.busy) return;
   pk.busy = true; renderPicker();
   let failed = false;
+  const prevKeys = [tracks[0].key, tracks[1].key];
   for (const slot of [0, 1]) {
     const key = pk.chosen[slot];
     if (key === tracks[slot].key) continue;
@@ -548,8 +551,81 @@ $("#pkOk").onclick = async () => {
     audioN = pk.audioN; startPlayback(t, playing || first);
   } else if (first && film.info) { wantPlay = true; media.play(); }
   film.pickedOnce = true;
+  // скачанные и внешние субтитры сразу подгоняем под голоса (встроенные обычно и так точные)
+  for (const slot of [1, 0]) {
+    const k = tracks[slot].key;
+    if (k && k !== prevKeys[slot] && !k.startsWith("emb:") && !k.startsWith("ai:")) autoSync(slot, true);
+  }
   closePicker();
 };
+
+/* ---------- подгонка субтитров под голоса ---------- */
+const syncState = ["", ""];
+const FPS_NAMES = [[25 / 23.976, "23.976 → 25 кадр/с"], [23.976 / 25, "25 → 23.976 кадр/с"], [24 / 23.976, "23.976 → 24 кадр/с"], [23.976 / 24, "24 → 23.976 кадр/с"], [25 / 24, "24 → 25 кадр/с"], [24 / 25, "25 → 24 кадр/с"]];
+function describeSync(r) {
+  const sh = `сдвиг ${r.offset >= 0 ? "+" : "−"}${Math.abs(r.offset).toFixed(1)} с`;
+  const f = FPS_NAMES.find(([v]) => Math.abs(v - r.scale) < 1e-6);
+  return f ? `${sh}, скорость ${f[1]}` : sh;
+}
+const plain = cs => cs.map(c => ({ s: c.s, e: c.e }));
+function applySync(slot, r, silent) {
+  const tr = tracks[slot];
+  tr.orig = tr.orig || tr.cues.map(c => ({ ...c }));
+  tr.cues = tr.orig.map((c, i) => ({ ...c, s: c.s * r.scale, e: c.e * r.scale, id: i }));
+  tr.sync = r; S.t[slot].delay = r.offset; save();
+  syncState[slot] = "Подогнано: " + describeSync(r);
+  shown = [null, null]; renderTranscript(); renderLook(); tick(true);
+  if (!silent) toast(`Ряд ${slot + 1}: ${describeSync(r)}`);
+}
+function resetSync(slot) {
+  const tr = tracks[slot]; if (!tr.orig) return;
+  tr.cues = tr.orig.map((c, i) => ({ ...c, id: i })); tr.orig = null; tr.sync = null;
+  S.t[slot].delay = 0; save(); syncState[slot] = "";
+  shown = [null, null]; renderTranscript(); renderLook(); tick(true);
+}
+// Встроенные в файл субтитры считаем точными: второй ряд подгоняем к ним, иначе — к звуку
+async function autoSync(slot, quiet) {
+  const tr = tracks[slot]; if (!tr.cues.length || !film?.info) return;
+  const src = tr.orig || tr.cues;
+  const other = tracks[1 - slot];
+  const ref = other.cues.length && other.key?.startsWith("emb:") ? other.cues.map(c => ({ s: c.s + S.t[1 - slot].delay, e: c.e + S.t[1 - slot].delay })) : null;
+  syncState[slot] = ref ? "Подгоняю к ряду " + (2 - slot) + "…" : "Слушаю звук фильма и подгоняю… (первый раз до минуты)"; renderLook();
+  try {
+    const r = ref ? await api.syncCues(ref, plain(src)) : (film.info.audio.length ? await api.syncAudio(film.path, audioN, plain(src)) : null);
+    if (tracks[slot] !== tr) return;
+    if (!r) { syncState[slot] = "В файле нет звука — подгонка недоступна"; renderLook(); return; }
+    if (r.confidence < 4) {
+      syncState[slot] = `Не получилось уверенно подогнать (оценка ${r.confidence}). Нажмите «По реплике».`;
+      if (!quiet) toast(syncState[slot]); renderLook(); return;
+    }
+    if (Math.abs(r.offset) < 0.25 && r.scale === 1) { syncState[slot] = "Уже совпадают со звуком"; if (!quiet) toast(`Ряд ${slot + 1}: уже совпадает`); renderLook(); return; }
+    applySync(slot, r);
+  } catch (e) { syncState[slot] = "Ошибка подгонки: " + e.message; renderLook(); }
+}
+// Ручная подгонка: пользователь показывает, какая реплика звучит прямо сейчас
+function pickLineNow(slot) {
+  const tr = tracks[slot]; if (!tr.cues.length || !film) return;
+  const wasPlaying = !video.paused; media.pause();
+  const now = media.t, x = now - S.t[slot].delay;
+  let near = tr.cues.filter(c => Math.abs(c.s - x) < 60);
+  near.sort((a, b) => Math.abs(a.s - x) - Math.abs(b.s - x)); near = near.slice(0, 12).sort((a, b) => a.s - b.s);
+  if (!near.length) near = tr.cues.slice(0, 12);
+  document.querySelector(".linepick")?.remove();
+  const el = document.createElement("div"); el.className = "pop linepick";
+  el.style.left = "50%"; el.style.top = "12px"; el.style.transform = "translateX(-50%)"; el.style.width = "min(560px, calc(100% - 20px))";
+  el.innerHTML = `<button class="x" aria-label="Закрыть">×</button><div class="head"><span class="word" style="font-size:15px">Какую фразу ряда ${slot + 1} сейчас произнесли?</span></div>
+    <div class="hint" style="margin:4px 0 8px">Нажмите на неё — ряд сдвинется так, чтобы она начиналась в ${fmt(now)}.</div>
+    <div class="tl" style="max-height:320px;overflow:auto">${near.map(c => `<div class="cue" data-s="${c.s}"><span class="tc">${fmt(c.s + S.t[slot].delay)}</span><div class="a" style="color:var(--fg)">${esc(c.text)}</div></div>`).join("")}</div>`;
+  player.append(el);
+  const close = () => { el.remove(); if (wasPlaying) media.play(); };
+  el.querySelector(".x").onclick = close;
+  el.addEventListener("click", e => {
+    const r = e.target.closest(".cue"); if (!r) return;
+    S.t[slot].delay = Math.round((now - parseFloat(r.dataset.s)) * 100) / 100; save();
+    syncState[slot] = `Подогнано по реплике: сдвиг ${S.t[slot].delay >= 0 ? "+" : "−"}${Math.abs(S.t[slot].delay).toFixed(1)} с`;
+    shown = [null, null]; renderTranscript(); renderLook(); tick(true); toast(`Ряд ${slot + 1}: ${syncState[slot]}`); close();
+  });
+}
 
 /* ---------- текст фильма ---------- */
 const tl = $("#tl"); let tlRows = [], tlActive = -1;
@@ -689,6 +765,8 @@ function trackSec(i) {
     <div class="fld"><span>Положение</span><div class="seg">${[["bottom", "Снизу"], ["top", "Сверху"]].map(([v, l]) => `<button data-edge="${i}" data-v="${v}" aria-pressed="${c.edge === v}">${l}</button>`).join("")}</div><span></span></div>
     ${f("Отступ", `<input type="range" id="off${i}" min="0" max="45" step="0.5" value="${c.offset}">`, c.offset + "%")}
     <div class="fld"><span>Сдвиг</span><div class="nudge"><button data-nd="${i}" data-v="-0.5">−½</button><button data-nd="${i}" data-v="-0.1">−</button><button data-nd="${i}" data-v="0.1">+</button><button data-nd="${i}" data-v="0.5">+½</button><button data-nd="${i}" data-v="0" title="Сбросить">0</button></div><span class="v">${(c.delay > 0 ? "+" : "") + c.delay.toFixed(1)} с</span></div>
+    ${tr.cues.length ? `<div class="fld"><span>Подгонка</span><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" data-sync="${i}" title="Сравнить реплики с речью в фильме">Под голоса</button><button class="btn sm" data-lineat="${i}" title="Показать, какая фраза звучит сейчас">По реплике</button>${tr.orig || c.delay ? `<button class="btn sm" data-unsync="${i}">Сбросить</button>` : ""}</div><span></span></div>` : ""}
+    ${syncState[i] ? `<div class="hint">${esc(syncState[i])}</div>` : ""}
   </div>`;
 }
 function renderLook() {
@@ -704,8 +782,8 @@ function renderLook() {
   </div>
   <div class="sec">
     <h3>Переводчик</h3>
-    <div class="seg"><button data-trp="google" aria-pressed="${CFG.translator !== "claude"}">Google · бесплатно</button><button data-trp="claude" aria-pressed="${CFG.translator === "claude"}">Claude · с учётом фразы</button></div>
-    ${CFG.translator === "claude" ? `<div class="q"><input type="password" class="fldi" id="clKey" placeholder="${CFG.hasClaudeKey ? "ключ сохранён" : "API-ключ Anthropic (sk-ant-…)"}" style="flex:1"><button class="btn sm" id="clSave">Сохранить</button></div><div class="hint">Ключ создаётся на <a href="#" data-url="https://console.anthropic.com/settings/keys">console.anthropic.com</a>, запросы оплачиваются там же. Без ключа работает Google.</div>` : `<div class="hint">Google даёт перевод и словарные значения. Claude объясняет смысл слова именно в этой фразе: идиомы, сленг, грамматику.</div>`}
+    <div class="seg"><button data-trp="google" aria-pressed="${CFG.translator !== "claude"}">Бесплатно</button><button data-trp="claude" aria-pressed="${CFG.translator === "claude"}">Claude · с учётом фразы</button></div>
+    ${CFG.translator === "claude" ? `<div class="q"><input type="password" class="fldi" id="clKey" placeholder="${CFG.hasClaudeKey ? "ключ сохранён" : "API-ключ Anthropic (sk-ant-…)"}" style="flex:1"><button class="btn sm" id="clSave">Сохранить</button></div><div class="hint">Ключ создаётся на <a href="#" data-url="https://console.anthropic.com/settings/keys">console.anthropic.com</a>, запросы оплачиваются там же. Без ключа работает Google.</div>` : `<div class="hint">Бесплатно: Google, а если он недоступен — MyMemory. Claude объясняет смысл слова именно в этой фразе: идиомы, сленг, грамматику.</div>`}
   </div>
   <div class="sec">
     <h3>SubDL · поиск субтитров</h3>
@@ -756,7 +834,10 @@ pl.addEventListener("change", e => {
 pl.addEventListener("click", async e => {
   const a = e.target.closest("[data-url]"); if (a) { e.preventDefault(); api.openUrl(a.dataset.url); return; }
   const b = e.target.closest("button"); if (!b) return;
-  if (b.dataset.col) upd(() => S.t[+b.dataset.col].color = b.dataset.v);
+  if (b.dataset.sync) autoSync(+b.dataset.sync, false);
+  else if (b.dataset.lineat) pickLineNow(+b.dataset.lineat);
+  else if (b.dataset.unsync) { if (tracks[+b.dataset.unsync].orig) resetSync(+b.dataset.unsync); else { S.t[+b.dataset.unsync].delay = 0; save(); syncState[+b.dataset.unsync] = ""; shown = [null, null]; renderTranscript(); renderLook(); tick(true); } }
+  else if (b.dataset.col) upd(() => S.t[+b.dataset.col].color = b.dataset.v);
   else if (b.dataset.bg) upd(() => S.t[+b.dataset.bg].bg = b.dataset.v);
   else if (b.dataset.edge) upd(() => S.t[+b.dataset.edge].edge = b.dataset.v);
   else if (b.dataset.nd) { const i = +b.dataset.nd, v = +b.dataset.v; upd(() => S.t[i].delay = v === 0 ? 0 : Math.round((S.t[i].delay + v) * 10) / 10); shown = [null, null]; renderTranscript(); }
