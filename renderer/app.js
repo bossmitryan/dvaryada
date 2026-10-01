@@ -8,7 +8,13 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 };
-function toast(t) { const el = document.createElement("div"); el.className = "toast"; el.textContent = t; document.body.append(el); setTimeout(() => el.remove(), 3200); }
+function toast(t) {
+  let box = document.getElementById("toasts");
+  if (!box) { box = document.createElement("div"); box.id = "toasts"; document.body.append(box); }
+  const el = document.createElement("div"); el.className = "toast"; el.textContent = t; box.append(el);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => el.remove(), 3800);
+}
 const fmt = s => { if (!isFinite(s)) s = 0; s = Math.max(0, s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = Math.floor(s % 60); return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); };
 
 /* ---------- языки ---------- */
@@ -22,7 +28,7 @@ const DEF_TRACK = (color, edge, size, offset, karaoke = false) => ({ on: true, c
 const DEFAULTS = { t: [DEF_TRACK("#ffffff", "bottom", 4.6, 4, true), DEF_TRACK("#f2b233", "bottom", 3.8, 1)], order: [0, 1], hoverPause: true, popPause: true, lang: "русский", rate: 1, vol: 1 };
 let S = Object.assign(structuredClone(DEFAULTS), store.get("dr.settings", {}));
 S.t = [0, 1].map(i => Object.assign(structuredClone(DEFAULTS.t[i]), (S.t || [])[i] || {}));
-const save = () => store.set("dr.settings", S);
+const save = () => { store.set("dr.settings", S); if (typeof rememberFilm === "function") rememberFilm(); };
 let CFG = { osApiKey: "", osUsername: "", osHasPassword: false, subLangs: ["en", "ru"], translator: "google", hasClaudeKey: false };
 
 /* ---------- видео и режимы воспроизведения ---------- */
@@ -184,6 +190,7 @@ function computeWordTimes(slot, delayMs = 400) {
   clearTimeout(wtTimers[slot]);
   wtTimers[slot] = setTimeout(async () => {
     const tr = tracks[slot];
+    if (film && !film.info) { computeWordTimes(slot, 1000); return; } // фильм ещё открывается
     if (tr.exact || !S.t[slot].karaoke || !tr.cues.length || !film?.info?.audio?.length || !api.wordTimes) return;
     const d = S.t[slot].delay;
     const payload = tr.cues.map(c => ({ s: c.s + d, e: c.e + d, ...cueWords(c.text) }));
@@ -269,14 +276,18 @@ async function openFilm(p) {
   film = { path: p, name, info: null, hash: null, pickedOnce: false };
   $("#welcome").hidden = true; $("#nowName").textContent = name; $("#bSubs").disabled = false;
   resetPicker(name);
-  openPicker();
-  // всё параллельно: разбор файла, соседние субтитры, хеш и поиск
   const f = film;
+  // для этого фильма уже выбирали субтитры — восстанавливаем без вопросов
+  const mem = api.filmGet ? await api.filmGet(p).catch(() => null) : null;
+  if (film !== f) return;
+  if (mem && mem.tracks && mem.tracks.some(t => t && ((t.cues && t.cues.length) || t.whId))) { restoreFilm(mem); pk.lazySearch = true; }
+  else openPicker();
+  // всё параллельно: разбор файла, соседние субтитры, хеш и поиск
   api.openMedia(p).then(info => {
     if (film !== f) return;
     f.info = info;
     pk.emb = info.subs; pk.audio = info.audio;
-    audioN = pickDefaultAudio(info.audio);
+    audioN = mem && info.audio[mem.audioN] ? mem.audioN : pickDefaultAudio(info.audio);
     pk.audioN = audioN;
     pk.embStatus = "done"; autoPick(); renderPicker();
     startPlayback(0, f.pickedOnce);
@@ -284,7 +295,40 @@ async function openFilm(p) {
   }).catch(e => { if (film !== f) return; pk.embStatus = "error"; pk.embErr = e.message; renderPicker(); showMsg("Не удалось открыть файл: " + e.message); });
   api.siblingSubs(p).then(list => { if (film !== f) return; pk.side = list; autoPick(); renderPicker(); }).catch(() => {});
   f.hashP = api.hash(p).catch(() => null);
-  runSearch(true);
+  if (!pk.lazySearch) runSearch(true);
+}
+
+/* ---------- память субтитров для каждого фильма ---------- */
+function restoreFilm(mem) {
+  [0, 1].forEach(i => {
+    const t = mem.tracks[i];
+    if (t && t.whId && !(t.cues && t.cues.length)) { tracks[i] = { key: t.key, name: t.name, lang: t.lang || "", cues: [], whId: t.whId }; setTimeout(() => watchWhisper(i, t.key, t.whId), 0); return; }
+    if (!t || !t.cues || !t.cues.length) { tracks[i] = { name: "", cues: [], key: null }; return; }
+    tracks[i] = { key: t.key, name: t.name, lang: t.lang || "", cues: t.cues.map((c, k) => ({ ...c, id: k })), orig: t.orig || null, sync: t.sync || null, exact: !!t.exact, wt: t.wt || null, wtDelay: t.wtDelay || 0 };
+    S.t[i].delay = t.delay || 0;
+    syncState[i] = t.sync ? "Подогнано: " + describeSync(t.sync) : t.exact ? "Расшифровано из звука: текст совпадает с озвучкой" : "";
+    if (!tracks[i].exact && !tracks[i].wt) computeWordTimes(i, 2500);
+  });
+  film.pickedOnce = true;
+  shown = [null, null]; renderTranscript(); renderLook(); tick(true);
+  toast("Субтитры этого фильма восстановлены. Сменить — кнопка «Сменить» или клавиша C.");
+}
+let memTimer = 0;
+function rememberFilm() {
+  if (!film || !film.pickedOnce || !api.filmSave) return;
+  clearTimeout(memTimer);
+  const f = film;
+  memTimer = setTimeout(() => {
+    if (film !== f) return;
+    const data = { audioN, tracks: [0, 1].map(i => {
+      const t = tracks[i];
+      if (t.key && !t.cues.length && t.whId) return { key: t.key, name: t.name, lang: t.lang, cues: [], whId: t.whId, delay: 0 }; // распознавание ещё идёт
+      if (!t.key || !t.cues.length) return null;
+      return { key: t.key, name: t.name, lang: t.lang, cues: t.cues.map(({ s, e, text }) => ({ s, e, text })), orig: t.orig ? t.orig.map(({ s, e, text }) => ({ s, e, text })) : null,
+        sync: t.sync || null, exact: !!t.exact, wt: t.exact ? t.wt : null, wtDelay: t.exact ? (t.wtDelay || 0) : 0, delay: S.t[i].delay };
+    }) };
+    api.filmSave(f.path, data.tracks.some(Boolean) ? data : null).catch(() => {});
+  }, 1200);
 }
 function pickDefaultAudio(list) {
   if (!list.length) return 0;
@@ -319,6 +363,7 @@ function resetPicker(name) {
 }
 function openPicker() {
   if (!pk) return;
+  if (pk.lazySearch) { pk.lazySearch = false; runSearch(true); }
   if (film?.pickedOnce) { pk.chosen = [tracks[0].key, tracks[1].key]; pk.audioN = audioN; }
   $("#picker").hidden = false; renderPicker();
 }
@@ -579,6 +624,7 @@ async function loadCandidate(key) {
 }
 function setTrack(slot, key, name, cues, lang = "") {
   tracks[slot] = { key, name, cues, lang };
+  setTimeout(rememberFilm, 0);
   computeWordTimes(slot, 1500);
   syncState[slot] = "";
   S.t[slot].delay = 0; save();
@@ -598,7 +644,7 @@ $("#pkOk").onclick = async () => {
       if (!r.cues.length && !r.pending) throw new Error("в файле нет реплик");
       setTrack(slot, key, r.name, r.cues, r.lang);
       if (r.wt) { tracks[slot].wt = r.wt; tracks[slot].wtDelay = 0; tracks[slot].exact = true; }
-      if (r.pending) watchWhisper(slot, key, r.pending);
+      if (r.pending) { tracks[slot].whId = r.pending; watchWhisper(slot, key, r.pending); }
       pk.rowStatus[key] = "";
     } catch (e) {
       failed = true;
@@ -891,9 +937,27 @@ function renderLook() {
     <div class="keys"><kbd>Пробел</kbd><span>пуск / пауза</span><kbd>← →</kbd><span>±5 секунд</span><kbd>A / D</kbd><span>предыдущая / следующая фраза</span><kbd>S</kbd><span>повторить фразу</span><kbd>1 / 2</kbd><span>скрыть / показать ряд</span><kbd>C</kbd><span>сменить субтитры и озвучку</span><kbd>F</kbd><span>во весь экран</span></div>
   </div>
   <button class="btn sm" id="reset">Сбросить оформление</button>`;
+  // разделы сворачиваются: открытые запоминаются
+  const open = new Set(store.get("dr.openSecs", ["Ряд 1", "Ряд 2"]));
+  p.querySelectorAll(".sec").forEach(sec => {
+    const h = sec.querySelector("h3"); if (!h) return;
+    const key = h.textContent.replace(/\s+/g, " ").trim().split(" · ")[0].replace(/\s*\(.*\)$/, "");
+    sec.dataset.key = key;
+    sec.classList.toggle("collapsed", !open.has(key));
+    h.setAttribute("role", "button"); h.tabIndex = 0; h.setAttribute("aria-expanded", String(open.has(key)));
+  });
   p.scrollTop = sc;
 }
 const pl = $("#pLook");
+function toggleSec(sec) {
+  const open = new Set(store.get("dr.openSecs", ["Ряд 1", "Ряд 2"]));
+  const k = sec.dataset.key;
+  if (open.has(k)) open.delete(k); else open.add(k);
+  store.set("dr.openSecs", [...open]);
+  sec.classList.toggle("collapsed", !open.has(k));
+  sec.querySelector("h3")?.setAttribute("aria-expanded", String(open.has(k)));
+}
+pl.addEventListener("keydown", e => { const h = e.target.closest(".sec > h3"); if (h && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleSec(h.parentElement); } });
 const upd = (fn, rerender = true) => { fn(); save(); applyStyles(); if (rerender) renderLook(); };
 pl.addEventListener("input", e => {
   const m = e.target.id.match(/^(size|off|op|col)(\d)$/); if (!m) return;
@@ -917,6 +981,7 @@ pl.addEventListener("change", e => {
   else if (id === "rsAuto") api.remoteAutostart(e.target.checked).then(r => { RS = r; renderLook(); });
 });
 pl.addEventListener("click", async e => {
+  const h = e.target.closest(".sec > h3"); if (h) { toggleSec(h.parentElement); return; }
   const a = e.target.closest("[data-url]"); if (a) { e.preventDefault(); api.openUrl(a.dataset.url); return; }
   const b = e.target.closest("button"); if (!b) return;
   if (b.dataset.sync) autoSync(+b.dataset.sync, false);
@@ -964,6 +1029,7 @@ async function translateTrack() {
   tracks[dst] = { key, name: `Перевод (${lang})`, cues: out, ai: true }; S.t[dst].delay = S.t[src].delay;
   const B = CFG.translator === "claude" ? 40 : 60;
   aiJob = { done: 0, total: cues.length, pct: 0, stop: false }; renderLook();
+  jobSet("tr", `Перевожу ряд ${src + 1} → ${dst + 1}`, 0);
   try {
     for (let k = 0; k < cues.length && !aiJob.stop; k += B) {
       const chunk = cues.slice(k, k + B);
@@ -971,6 +1037,7 @@ async function translateTrack() {
       const arr = await api.trLines({ lines: chunk.map(c => c.text.replace(/\n/g, " ")), target: lang, context });
       chunk.forEach((c, j) => { out[k + j].text = arr[j] || ""; });
       aiJob.done = Math.min(cues.length, k + B); aiJob.pct = Math.round(aiJob.done / cues.length * 100);
+      jobSet("tr", `Перевожу ряд ${src + 1} → ${dst + 1}`, aiJob.done / aiJob.total);
       const bar = $("#aiBar"), tx = $("#aiTxt"); if (bar) bar.style.width = aiJob.pct + "%"; if (tx) tx.textContent = `${aiJob.done} из ${aiJob.total}`;
       tracks[dst].cues = out.filter(c => c.text).map((c, i) => ({ ...c, id: i }));
       shown[dst] = null; renderTranscript();
@@ -978,7 +1045,21 @@ async function translateTrack() {
     toast(aiJob.stop ? "Перевод остановлен — готовая часть сохранена" : "Перевод ряда готов");
   } catch (e) { toast("Перевод прерван: " + e.message); }
   tracks[dst].cues = out.filter(c => c.text).map((c, i) => ({ ...c, id: i }));
-  aiJob = null; shown = [null, null]; renderTranscript(); renderLook(); save(); applyStyles();
+  aiJob = null; jobDone("tr"); shown = [null, null]; renderTranscript(); renderLook(); save(); applyStyles();
+}
+
+/* ---------- полоски прогресса долгих задач (распознавание, перевод) ---------- */
+const JOBS = new Map();
+function jobSet(id, label, p) {
+  JOBS.set(id, { label, p });
+  renderJobs();
+}
+function jobDone(id) { JOBS.delete(id); renderJobs(); }
+function renderJobs() {
+  let box = $("#jobs");
+  if (!box) { box = document.createElement("div"); box.id = "jobs"; box.className = "jobs"; stage.append(box); }
+  box.hidden = !JOBS.size;
+  box.innerHTML = [...JOBS.values()].map(j => `<div class="job"><div class="jl"><span>${esc(j.label)}</span><b>${j.p == null ? "" : Math.round(j.p * 100) + "%"}</b></div><div class="bar"><i style="width:${j.p == null ? 8 : Math.max(2, Math.round(j.p * 100))}%"${j.p == null ? ' class="indet"' : ""}></i></div></div>`).join("");
 }
 
 /* ---------- распознавание речи (Whisper) ---------- */
@@ -987,16 +1068,19 @@ async function refreshWhisper(force) { if (!api.whisperInfo) return; try { WH = 
 function watchWhisper(slot, key, id) {
   syncState[slot] = "Распознаю речь… Можно смотреть, ряд появится сам."; renderLook();
   toast(`Ряд ${slot + 1}: распознаю речь фильма. Это займёт несколько минут — можно уже смотреть.`);
+  jobSet("wh" + slot, `Ряд ${slot + 1}: готовлю распознавание`, null);
   const t = setInterval(async () => {
-    if (tracks[slot].key !== key) return clearInterval(t);
+    if (tracks[slot].key !== key) { jobDone("wh" + slot); return clearInterval(t); }
     let st; try { st = await api.whisperStatus(id); } catch { return; }
     if (st.state === "running") {
+      jobSet("wh" + slot, `Ряд ${slot + 1}: ${st.p > 0 ? "распознаю речь" : (st.msg || "готовлю").replace(/…$/, "").toLowerCase()}`, st.p > 0 ? st.p : null);
       syncState[slot] = st.msg || "Распознаю речь…";
       const h = $("#syncHint" + slot); if (h) h.textContent = syncState[slot];
       if (tracks[slot].cues.length === 0) $("#nowName").textContent = (film?.name || "") + " · " + syncState[slot];
       return;
     }
     clearInterval(t);
+    jobDone("wh" + slot);
     $("#nowName").textContent = film?.name || "";
     if (st.state === "done") {
       const r = await api.whisperResult(id);

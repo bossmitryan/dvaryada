@@ -81,6 +81,8 @@
     onUpdProgress: () => {},
     library: () => call("library"),
     whisperInfo: () => call("whisperInfo"),
+    filmGet: p => call("filmGet", p),
+    filmSave: (p, d) => call("filmSave", p, d),
     whisperStart: (p, a, l) => call("whisperStart", p, a, l),
     whisperStatus: id => call("whisperStatus", id),
     whisperResult: id => call("whisperResult", id),

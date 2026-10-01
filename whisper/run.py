@@ -11,6 +11,14 @@ def say(obj):
     sys.stdout.flush()
 
 
+def read_wav(path):
+    import wave
+    import numpy as np
+    with wave.open(path, "rb") as w:
+        data = w.readframes(w.getnframes())
+    return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def load(size):
     from faster_whisper import WhisperModel
     last = None
@@ -30,8 +38,12 @@ def main():
     model, device = load(size)
     say({"info": {"device": device, "model": size}})
 
+    # звук уже подготовлен ffmpeg (16 кГц, моно, 16 бит) — читаем его сами, без PyAV:
+    # у разных версий PyAV несовместимы параметры, и faster-whisper падает на чтении файла
+    samples = read_wav(audio)
+
     def run(m):
-        segs, info = m.transcribe(audio, language=None if lang == "auto" else lang, word_timestamps=True,
+        segs, info = m.transcribe(samples, language=None if lang == "auto" else lang, word_timestamps=True,
                                   vad_filter=True, beam_size=5, condition_on_previous_text=False)
         say({"info": {"language": info.language, "duration": info.duration}})
         res = []

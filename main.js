@@ -74,13 +74,22 @@ const H = {
   // Субтитры, лежащие рядом с фильмом (Film.srt, Film.en.srt, Subs/...)
   async siblingSubs(file) {
     const dir = path.dirname(file), stem = path.basename(file, path.extname(file)).toLowerCase();
+    // если в папке несколько фильмов — берём только субтитры с похожим именем (иначе предложим чужие)
+    const key = s => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    const ep = (stem.match(/s\d{1,2}\s?e\d{1,3}/i) || [""])[0].replace(/\s/g, "").toLowerCase();
+    let videos = 0; try { videos = fs.readdirSync(dir).filter(n => /\.(mkv|mp4|m4v|webm|mov|avi|ts|m2ts|wmv)$/i.test(n)).length; } catch {}
+    const like = name => {
+      const n = key(name);
+      if (ep) return n.includes(ep);
+      return n.startsWith(key(stem).slice(0, 6));
+    };
     const found = [];
     const scan = (d, depth) => {
       let items = []; try { items = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
       for (const it of items) {
         const p = path.join(d, it.name);
         if (it.isDirectory() && depth < 1 && /^(subs?|subtitles|субтитры)$/i.test(it.name)) scan(p, depth + 1);
-        else if (it.isFile() && /\.(srt|vtt|ass|ssa)$/i.test(it.name) && (depth > 0 || it.name.toLowerCase().startsWith(stem.slice(0, 8)))) found.push({ path: p, name: it.name });
+        else if (it.isFile() && /\.(srt|vtt|ass|ssa)$/i.test(it.name) && ((depth > 0 && videos <= 1) || like(it.name))) found.push({ path: p, name: it.name });
       }
     };
     scan(dir, 0);
@@ -136,6 +145,18 @@ const H = {
     return whisper.start({ python: info.python, file, audioN, model: info.model, lang: lang || "auto", cacheDir: path.join(app.getPath("userData"), "transcripts") });
   },
   async whisperStatus(id) { return whisper.status(id); },
+  // память субтитров для каждого фильма
+  async filmGet(file) {
+    const f = filmFile(file);
+    try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; }
+  },
+  async filmSave(file, data) {
+    const f = filmFile(file);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    if (!data) { try { fs.unlinkSync(f); } catch {} return true; }
+    fs.writeFileSync(f, JSON.stringify({ ...data, file: path.basename(file), savedAt: Date.now() }));
+    return true;
+  },
   async whisperResult(id) { return whisper.result(id); },
   async library() {
     lastScan = library.scan(cfg.libraryFolders);
@@ -143,6 +164,7 @@ const H = {
   }
 };
 let lastScan = [];
+const filmFile = file => path.join(app.getPath("userData"), "films", library.idOf(path.resolve(file)) + ".json");
 let whisperState = null, whisperInstalling = "";
 
 /* ---------- то же для планшета, но только внутри папок библиотеки ---------- */
@@ -169,6 +191,8 @@ const remoteHandlers = {
   whisperInfo: () => H.whisperInfo(),
   whisperStart: (f, a, l) => H.whisperStart(needLib(f), a, l),
   whisperStatus: H.whisperStatus,
+  filmGet: f => H.filmGet(needLib(f)),
+  filmSave: (f, d) => H.filmSave(needLib(f), d),
   whisperResult: H.whisperResult
 };
 
@@ -265,7 +289,7 @@ const CHANNELS = {
   "media:open": "openMedia", "media:hash": "hash", "sync:warm": "syncWarm", "sync:audio": "syncAudio", "sync:cues": "syncCues", "words:times": "wordTimes",
   "media:seekPlan": "seekPlan", "media:extractSub": "extractSub", "media:siblingSubs": "siblingSubs", "file:read": "readFile",
   "cfg:get": "getCfg", "cfg:set": "setCfg", "os:login": "osLogin", "os:guess": "osGuess", "os:search": "osSearch", "os:download": "osDownload",
-  "sd:search": "sdSearch", "sd:download": "sdDownload", "tr:word": "trWord", "tr:lines": "trLines", "app:version": "appVersion", "wh:info": "whisperInfo", "wh:install": "whisperInstall", "wh:model": "whisperSetModel", "wh:start": "whisperStart", "wh:status": "whisperStatus", "wh:result": "whisperResult"
+  "sd:search": "sdSearch", "sd:download": "sdDownload", "tr:word": "trWord", "tr:lines": "trLines", "app:version": "appVersion", "wh:info": "whisperInfo", "wh:install": "whisperInstall", "wh:model": "whisperSetModel", "wh:start": "whisperStart", "wh:status": "whisperStatus", "wh:result": "whisperResult", "film:get": "filmGet", "film:save": "filmSave"
 };
 for (const [ch, name] of Object.entries(CHANNELS)) ipcMain.handle(ch, wrap(H[name]));
 

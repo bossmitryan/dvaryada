@@ -53,5 +53,7 @@ contextBridge.exposeInMainWorld("api", {
   whisperStart: (p, a, l) => call("wh:start", p, a, l),
   whisperStatus: id => call("wh:status", id),
   whisperResult: id => call("wh:result", id),
+  filmGet: p => call("film:get", p),
+  filmSave: (p, d) => call("film:save", p, d),
   onOpenFile: fn => ipcRenderer.on("open-file", (_e, p) => fn(p))
 });
