@@ -184,7 +184,7 @@ function computeWordTimes(slot, delayMs = 400) {
   clearTimeout(wtTimers[slot]);
   wtTimers[slot] = setTimeout(async () => {
     const tr = tracks[slot];
-    if (!S.t[slot].karaoke || !tr.cues.length || !film?.info?.audio?.length || !api.wordTimes) return;
+    if (tr.exact || !S.t[slot].karaoke || !tr.cues.length || !film?.info?.audio?.length || !api.wordTimes) return;
     const d = S.t[slot].delay;
     const payload = tr.cues.map(c => ({ s: c.s + d, e: c.e + d, ...cueWords(c.text) }));
     try {
@@ -366,12 +366,17 @@ async function runSearch(initial) {
   }));
 }
 
-const candLang = c => (c.kind === "emb" || c.kind === "net") ? norm(c.lang) : langFromName(c.name || "");
+const candLang = c => (c.kind === "emb" || c.kind === "net" || c.kind === "wh") ? norm(c.lang) : langFromName(c.name || "");
 function allCands() {
   const out = [];
   pk.emb.forEach(s => out.push({ key: "emb:" + s.n, kind: "emb", lang: s.lang, name: s.title || "", codec: s.codec, text: s.text, forced: s.forced, n: s.n }));
   pk.side.forEach(s => out.push({ key: "side:" + s.path, kind: "side", name: s.name, path: s.path, lang: langFromName(s.name) }));
   pk.own.forEach(s => out.push({ key: "own:" + s.name, kind: "own", name: s.name, lang: langFromName(s.name) }));
+  if (WH && WH.python && pk.audio.length) {
+    const a = pk.audio[pk.audioN] || pk.audio[0];
+    const lang = norm(a.lang) || pk.langs[0] || "auto";
+    out.push({ key: `wh:${a.n}:${lang}`, kind: "wh", lang, audioN: a.n, name: "Расшифровать речь из фильма", audioTitle: a.title || "" });
+  }
   for (const id of Object.keys(SOURCES)) (pk.src[id]?.list || []).forEach(s => out.push({ ...s, key: id + ":" + s.fileId, kind: "net", src: id }));
   return out;
 }
@@ -397,6 +402,9 @@ function rowHTML(c) {
     meta.push(`<span>${esc(c.codec)}</span>`);
     if (c.forced) meta.push(`<span class="badge">только надписи</span>`);
     if (!c.text) meta.push(`<span class="badge warn">картинками — не поддерживается</span>`);
+  } else if (c.kind === "wh") {
+    title = "Речь из фильма — расшифровка Whisper";
+    meta.push(`<span class="badge good">слово в слово с озвучкой</span>`, `<span>модель ${esc(WH.model)}</span>`, `<span>${c.audioTitle ? "озвучка «" + esc(c.audioTitle) + "», " : ""}первый раз — несколько минут</span>`);
   } else if (c.kind === "side" || c.kind === "own") {
     title = c.name; meta.push(`<span>${c.kind === "side" ? "рядом с фильмом" : "ваш файл"}</span>`);
   } else {
@@ -446,6 +454,9 @@ function renderPicker() {
   else if (emb.length) html += group("Встроенные в файл", emb.map(rowHTML).join(""));
   const side = cands.filter(c => c.kind === "side" || c.kind === "own");
   if (side.length) html += group("Файлы на диске", side.map(rowHTML).join(""));
+  const wh = cands.filter(c => c.kind === "wh");
+  if (wh.length) html += group("Из звука фильма", wh.map(rowHTML).join(""));
+  else if (WH && !WH.python && !REMOTE) html += group("Из звука фильма", `<div class="hint">Whisper не найден на ПК — расшифровка речи недоступна. Подробнее: «Настройки → Распознавание речи».</div>`);
   // интернет-источники
   const anyKey = Object.values(SOURCES).some(s => s.has());
   for (const [id, src] of Object.entries(SOURCES)) {
@@ -546,6 +557,13 @@ async function loadCandidate(key) {
     return { lang: candLang(c), name: `${(candLang(c) || "").toUpperCase()} · из файла${c.name ? " · " + c.name : ""}`, cues: Subs.parse(r.text, "x." + r.format) };
   }
   if (c.kind === "side") { const r = await api.readFile(c.path); const t = Subs.decode(r.data); return { lang: candLang(c), name: c.name, cues: Subs.parse(t, c.name) }; }
+  if (c.kind === "wh") {
+    const id = await api.whisperStart(film.path, c.audioN, c.lang || "auto");
+    const st = await api.whisperStatus(id);
+    if (st.state === "done") { const r = await api.whisperResult(id); return { lang: r.language || c.lang, name: `${(r.language || c.lang || "").toUpperCase()} · речь из фильма (Whisper)`, cues: r.cues, wt: r.wt }; }
+    if (st.state === "error") throw new Error(st.error || "Whisper не справился");
+    return { pending: id, lang: c.lang, name: "Распознаю речь…", cues: [] };
+  }
   if (c.kind === "own") { const t = ownData.get(key); return { lang: candLang(c), name: c.name, cues: Subs.parse(t, c.name) }; }
   // интернет: SubDL или OpenSubtitles (скачанное кэшируется, чтобы не тратить лимит)
   let text = cacheGet(key);
@@ -577,8 +595,10 @@ $("#pkOk").onclick = async () => {
     if (!key) { setTrack(slot, null, "", []); continue; }
     try {
       const r = await loadCandidate(key);
-      if (!r.cues.length) throw new Error("в файле нет реплик");
+      if (!r.cues.length && !r.pending) throw new Error("в файле нет реплик");
       setTrack(slot, key, r.name, r.cues, r.lang);
+      if (r.wt) { tracks[slot].wt = r.wt; tracks[slot].wtDelay = 0; tracks[slot].exact = true; }
+      if (r.pending) watchWhisper(slot, key, r.pending);
       pk.rowStatus[key] = "";
     } catch (e) {
       failed = true;
@@ -599,7 +619,7 @@ $("#pkOk").onclick = async () => {
   // скачанные и внешние субтитры сразу подгоняем под голоса (встроенные обычно и так точные)
   for (const slot of [1, 0]) {
     const k = tracks[slot].key;
-    if (k && k !== prevKeys[slot] && !k.startsWith("emb:") && !k.startsWith("ai:")) autoSync(slot, true);
+    if (k && k !== prevKeys[slot] && !k.startsWith("emb:") && !k.startsWith("ai:") && !k.startsWith("wh:")) autoSync(slot, true);
   }
   closePicker();
 };
@@ -812,7 +832,7 @@ function trackSec(i) {
     ${f("Отступ", `<input type="range" id="off${i}" min="0" max="45" step="0.5" value="${c.offset}">`, c.offset + "%")}
     <div class="fld"><span>Сдвиг</span><div class="nudge"><button data-nd="${i}" data-v="-0.5">−½</button><button data-nd="${i}" data-v="-0.1">−</button><button data-nd="${i}" data-v="0.1">+</button><button data-nd="${i}" data-v="0.5">+½</button><button data-nd="${i}" data-v="0" title="Сбросить">0</button></div><span class="v">${(c.delay > 0 ? "+" : "") + c.delay.toFixed(1)} с</span></div>
     ${tr.cues.length ? `<div class="fld"><span>Подгонка</span><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" data-sync="${i}" title="Сравнить реплики с речью в фильме">Под голоса</button><button class="btn sm" data-lineat="${i}" title="Показать, какая фраза звучит сейчас">По реплике</button>${tr.orig || c.delay ? `<button class="btn sm" data-unsync="${i}">Сбросить</button>` : ""}</div><span></span></div>` : ""}
-    ${syncState[i] ? `<div class="hint">${esc(syncState[i])}</div>` : ""}
+    ${syncState[i] ? `<div class="hint" id="syncHint${i}">${esc(syncState[i])}</div>` : ""}
   </div>`;
 }
 function keysSec() {
@@ -864,6 +884,7 @@ function renderLook() {
     <div class="toolbar" style="margin:0"><button class="btn sm primary" id="aiGo" ${canAI && !aiJob ? "" : "disabled"}>${aiJob ? "Перевожу…" : "Перевести"}</button>${aiJob ? `<button class="btn sm" id="aiStop">Стоп</button>` : ""}</div>
     ${aiJob ? `<div class="bar"><i id="aiBar" style="width:${aiJob.pct}%"></i></div><div class="hint" id="aiTxt">${aiJob.done} из ${aiJob.total}</div>` : ""}
   </div>
+  ${whisperSec()}
   ${REMOTE ? tabletAppSec() : updSec() + tabletPcSec()}
   <div class="sec">
     <h3>Клавиши</h3>
@@ -916,6 +937,9 @@ pl.addEventListener("click", async e => {
     else toast("Сохранено");
     renderLook();
   }
+  else if (b.dataset.whm) { WH = await api.whisperSetModel(b.dataset.whm); renderLook(); }
+  else if (b.id === "whFind") { WH = null; renderLook(); refreshWhisper(true); }
+  else if (b.id === "whInstall") { b.disabled = true; b.textContent = "Устанавливаю…"; api.whisperInstall().then(r => { WH = r; renderLook(); toast(r.python ? "faster-whisper установлен" : "Не удалось установить"); }).catch(e => { toast(e.message); refreshWhisper(true); }); const t = setInterval(async () => { const r = await api.whisperInfo().catch(() => null); if (!r || !r.installing) return clearInterval(t); WH = r; const h = document.querySelector("#pLook .sec .hint"); renderLook(); }, 3000); }
   else if (b.id === "rsAddFolder") { RS = await api.libAddFolder(); renderLook(); }
   else if (b.dataset.rmfolder) { RS = await api.libRemoveFolder(b.dataset.rmfolder); renderLook(); }
   else if (b.dataset.rmdev) { RS = await api.remoteRemoveDevice(b.dataset.rmdev); renderLook(); }
@@ -955,6 +979,47 @@ async function translateTrack() {
   } catch (e) { toast("Перевод прерван: " + e.message); }
   tracks[dst].cues = out.filter(c => c.text).map((c, i) => ({ ...c, id: i }));
   aiJob = null; shown = [null, null]; renderTranscript(); renderLook(); save(); applyStyles();
+}
+
+/* ---------- распознавание речи (Whisper) ---------- */
+let WH = null;
+async function refreshWhisper(force) { if (!api.whisperInfo) return; try { WH = await api.whisperInfo(force); } catch { WH = null; } renderLook(); renderPicker(); }
+function watchWhisper(slot, key, id) {
+  syncState[slot] = "Распознаю речь… Можно смотреть, ряд появится сам."; renderLook();
+  toast(`Ряд ${slot + 1}: распознаю речь фильма. Это займёт несколько минут — можно уже смотреть.`);
+  const t = setInterval(async () => {
+    if (tracks[slot].key !== key) return clearInterval(t);
+    let st; try { st = await api.whisperStatus(id); } catch { return; }
+    if (st.state === "running") {
+      syncState[slot] = st.msg || "Распознаю речь…";
+      const h = $("#syncHint" + slot); if (h) h.textContent = syncState[slot];
+      if (tracks[slot].cues.length === 0) $("#nowName").textContent = (film?.name || "") + " · " + syncState[slot];
+      return;
+    }
+    clearInterval(t);
+    $("#nowName").textContent = film?.name || "";
+    if (st.state === "done") {
+      const r = await api.whisperResult(id);
+      setTrack(slot, key, `${(r.language || "").toUpperCase()} · речь из фильма (Whisper)`, r.cues, r.language);
+      Object.assign(tracks[slot], { wt: r.wt, wtDelay: 0, exact: true });
+      syncState[slot] = "Расшифровано из звука: текст и время слов совпадают с озвучкой";
+      renderLook(); toast(`Ряд ${slot + 1}: речь распознана — ${r.cues.length} реплик`);
+    } else {
+      syncState[slot] = "Whisper: " + (st.error || "ошибка"); renderLook(); toast(syncState[slot]);
+    }
+  }, 2000);
+}
+function whisperSec() {
+  if (!api.whisperInfo || REMOTE) return "";
+  if (!WH) return `<div class="sec"><h3>Распознавание речи</h3><div class="hint">Ищу Whisper на ПК…</div></div>`;
+  return `<div class="sec">
+    <h3>Распознавание речи (Whisper)</h3>
+    ${WH.python ? `<div class="hint">Найден faster-whisper ${esc(WH.version || "")}: <span style="word-break:break-all">${esc(WH.python)}</span></div>
+      <div class="fld"><span>Модель</span><div class="seg">${["small", "medium", "large-v3"].map(m => `<button data-whm="${m}" aria-pressed="${WH.model === m}">${m}${WH.models.includes(m) ? "" : " ↓"}</button>`).join("")}</div><span></span></div>
+      <div class="hint">small — быстрее, medium — точнее (для испанского лучше medium). Значок ↓ — модель будет скачана при первом запуске. С видеокартой NVIDIA фильм распознаётся за несколько минут, на процессоре — дольше.</div>`
+    : `<div class="hint">${WH.installing ? esc(WH.installing) : "Python с faster-whisper не найден."}</div>
+      <div class="toolbar" style="margin:0"><button class="btn sm" id="whFind">Найти снова</button>${WH.base ? `<button class="btn sm primary" id="whInstall" ${WH.installing ? "disabled" : ""}>Установить faster-whisper</button>` : ""}</div>`}
+  </div>`;
 }
 
 /* ---------- планшет: раздача с ПК и библиотека ---------- */
@@ -1065,6 +1130,7 @@ api.onUpdProgress?.(m => { UPD.msg = m; const el = $("#updMsg"); if (el) el.text
   applyStyles(); renderTranscript(); renderLook(); renderDict(); syncPlayIcon(); loop();
   if (!REMOTE) setTimeout(() => checkUpdate(true), 4000);
   refreshRemote();
+  refreshWhisper(false);
   if (REMOTE) {
     document.body.classList.add("remote");
     $("#bOpen").lastChild.textContent = " Библиотека";

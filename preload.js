@@ -47,5 +47,11 @@ contextBridge.exposeInMainWorld("api", {
   libRemoveFolder: f => call("lib:removeFolder", f),
   library: () => call("lib:list"),
   onRemoteChanged: fn => ipcRenderer.on("remote-changed", () => fn()),
+  whisperInfo: force => call("wh:info", force),
+  whisperInstall: () => call("wh:install"),
+  whisperSetModel: m => call("wh:model", m),
+  whisperStart: (p, a, l) => call("wh:start", p, a, l),
+  whisperStatus: id => call("wh:status", id),
+  whisperResult: id => call("wh:result", id),
   onOpenFile: fn => ipcRenderer.on("open-file", (_e, p) => fn(p))
 });

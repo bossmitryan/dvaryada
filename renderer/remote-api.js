@@ -80,6 +80,10 @@
     appVersion: () => call("appVersion"),
     onUpdProgress: () => {},
     library: () => call("library"),
+    whisperInfo: () => call("whisperInfo"),
+    whisperStart: (p, a, l) => call("whisperStart", p, a, l),
+    whisperStatus: id => call("whisperStatus", id),
+    whisperResult: id => call("whisperResult", id),
     thumbUrl: id => withKey("/thumb/" + id),
     apkUrl: () => location.origin + "/apk",
     nativeVersion: () => (window.DvaRyadaApp && window.DvaRyadaApp.version) ? window.DvaRyadaApp.version() : ""

@@ -11,6 +11,7 @@ const { SubDL } = require("./lib/subdl");
 const tr = require("./lib/translate");
 const sync = require("./lib/sync");
 const words = require("./lib/words");
+const whisper = require("./lib/whisper");
 const updater = require("./lib/update");
 const library = require("./lib/library");
 const { createRemote } = require("./lib/remote");
@@ -108,12 +109,41 @@ const H = {
   trWord: q => tr.translateWord({ ...q, provider: cfg.translator || "google", apiKey: cfg.claudeKey }),
   trLines: q => tr.translateLines({ ...q, provider: cfg.translator || "google", apiKey: cfg.claudeKey }),
   async appVersion() { return require("./package.json").version; },
+  // распознавание речи (faster-whisper на этом ПК)
+  async whisperInfo(force) {
+    if (!whisperState || force) {
+      const d = await whisper.detect(cfg.whisperPython);
+      whisperState = { python: d.python, version: d.version, base: d.base, models: whisper.cachedModels() };
+      if (d.python && d.python !== cfg.whisperPython) { cfg.whisperPython = d.python; saveCfg(); }
+    }
+    return { ...whisperState, model: cfg.whisperModel || (whisperState.models.includes("medium") ? "medium" : "small"), installing: whisperInstalling };
+  },
+  async whisperInstall() {
+    const info = await H.whisperInfo();
+    if (info.python) return info;
+    if (!info.base) throw new Error("На ПК не найден Python. Установите его с python.org и нажмите «Найти снова».");
+    whisperInstalling = "Начинаю…";
+    try {
+      const py = await whisper.install(info.base, path.join(app.getPath("userData"), "whisper-env"), m => { whisperInstalling = m; });
+      cfg.whisperPython = py; saveCfg();
+    } finally { whisperInstalling = ""; }
+    return H.whisperInfo(true);
+  },
+  async whisperSetModel(m) { cfg.whisperModel = m; saveCfg(); return H.whisperInfo(); },
+  async whisperStart(file, audioN, lang) {
+    const info = await H.whisperInfo();
+    if (!info.python) throw Object.assign(new Error("Whisper не найден на ПК"), { code: "no_whisper" });
+    return whisper.start({ python: info.python, file, audioN, model: info.model, lang: lang || "auto", cacheDir: path.join(app.getPath("userData"), "transcripts") });
+  },
+  async whisperStatus(id) { return whisper.status(id); },
+  async whisperResult(id) { return whisper.result(id); },
   async library() {
     lastScan = library.scan(cfg.libraryFolders);
     return lastScan.map(({ path: p, ...x }) => ({ ...x, path: p }));
   }
 };
 let lastScan = [];
+let whisperState = null, whisperInstalling = "";
 
 /* ---------- то же для планшета, но только внутри папок библиотеки ---------- */
 const inLib = f => library.inside(f, cfg.libraryFolders);
@@ -135,7 +165,11 @@ const remoteHandlers = {
   osGuess: H.osGuess, osSearch: H.osSearch, osDownload: H.osDownload,
   sdSearch: H.sdSearch, sdDownload: H.sdDownload,
   trWord: H.trWord, trLines: H.trLines,
-  appVersion: H.appVersion
+  appVersion: H.appVersion,
+  whisperInfo: () => H.whisperInfo(),
+  whisperStart: (f, a, l) => H.whisperStart(needLib(f), a, l),
+  whisperStatus: H.whisperStatus,
+  whisperResult: H.whisperResult
 };
 
 /* ---------- APK для планшета: собирается на GitHub, ПК держит копию и раздаёт по сети ---------- */
@@ -231,7 +265,7 @@ const CHANNELS = {
   "media:open": "openMedia", "media:hash": "hash", "sync:warm": "syncWarm", "sync:audio": "syncAudio", "sync:cues": "syncCues", "words:times": "wordTimes",
   "media:seekPlan": "seekPlan", "media:extractSub": "extractSub", "media:siblingSubs": "siblingSubs", "file:read": "readFile",
   "cfg:get": "getCfg", "cfg:set": "setCfg", "os:login": "osLogin", "os:guess": "osGuess", "os:search": "osSearch", "os:download": "osDownload",
-  "sd:search": "sdSearch", "sd:download": "sdDownload", "tr:word": "trWord", "tr:lines": "trLines", "app:version": "appVersion"
+  "sd:search": "sdSearch", "sd:download": "sdDownload", "tr:word": "trWord", "tr:lines": "trLines", "app:version": "appVersion", "wh:info": "whisperInfo", "wh:install": "whisperInstall", "wh:model": "whisperSetModel", "wh:start": "whisperStart", "wh:status": "whisperStatus", "wh:result": "whisperResult"
 };
 for (const [ch, name] of Object.entries(CHANNELS)) ipcMain.handle(ch, wrap(H[name]));
 
