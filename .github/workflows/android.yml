@@ -42,17 +42,3 @@ jobs:
           files: DvaRyada.apk
           overwrite_files: true
           make_latest: true
-
-      # копия APK в репозитории: ПК получает её вместе с кнопкой «Обновить»
-      # и раздаёт планшету без обращения к серверам GitHub с файлами релизов
-      - name: Put APK into repo
-        run: |
-          mkdir -p android-dist
-          cp DvaRyada.apk android-dist/DvaRyada.apk
-          echo "1.0.${{ github.run_number }}" > android-dist/version.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add android-dist
-          git commit -m "APK 1.0.${{ github.run_number }} для планшета" || exit 0
-          git pull --rebase origin main
-          git push origin HEAD:main
