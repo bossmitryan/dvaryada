@@ -18,8 +18,8 @@ const norm = l => { l = String(l || "").toLowerCase(); return L3[l] ?? l.split(/
 const langFromName = n => { const m = String(n).toLowerCase().match(/[._\-\s\[(](en|eng|english|ru|rus|russian|de|ger|fr|fre|es|spa|it|ita|ja|jpn|ko|kor|uk|ukr)[._\-\s\])]/); if (!m) return ""; const x = m[1]; return ({ english: "en", russian: "ru" })[x] || norm(x); };
 
 /* ---------- настройки вида ---------- */
-const DEF_TRACK = (color, edge, size, offset) => ({ on: true, color, size, edge, offset, bg: "shadow", bgOp: 0.55, font: "ui", bold: false, delay: 0 });
-const DEFAULTS = { t: [DEF_TRACK("#ffffff", "bottom", 4.6, 4), DEF_TRACK("#f2b233", "bottom", 3.8, 1)], order: [0, 1], hoverPause: true, popPause: true, lang: "русский", rate: 1, vol: 1 };
+const DEF_TRACK = (color, edge, size, offset, karaoke = false) => ({ on: true, color, size, edge, offset, bg: "shadow", bgOp: 0.55, font: "ui", bold: false, delay: 0, karaoke });
+const DEFAULTS = { t: [DEF_TRACK("#ffffff", "bottom", 4.6, 4, true), DEF_TRACK("#f2b233", "bottom", 3.8, 1)], order: [0, 1], hoverPause: true, popPause: true, lang: "русский", rate: 1, vol: 1 };
 let S = Object.assign(structuredClone(DEFAULTS), store.get("dr.settings", {}));
 S.t = [0, 1].map(i => Object.assign(structuredClone(DEFAULTS.t[i]), (S.t || [])[i] || {}));
 const save = () => store.set("dr.settings", S);
@@ -147,9 +147,52 @@ function updateSubs(force) {
     const c = cueAt(i, t);
     if (!force && c === shown[i]) return;
     if (pop.open && pop.track === i && !media.paused) closePop();
-    shown[i] = c; subEl[i].innerHTML = c ? cueHTML(c.text) : "";
+    shown[i] = c; subEl[i].innerHTML = c ? cueHTML(c.text) : ""; kIdx[i] = -1;
   });
+  [0, 1].forEach(i => karaokeStep(i, t));
   highlightTranscript();
+}
+
+/* ---------- подсветка произносимого слова ---------- */
+const kIdx = [-1, -1];
+window.__dr = { get tracks() { return tracks; }, get S() { return S; }, get film() { return film; } }; // для отладки
+const KARAOKE_LEAD = 0.06; // чуть раньше звука — так глазу привычнее
+function cueWords(text) {
+  const words = [], gaps = []; let last = 0;
+  text.replace(WORD, (m, off) => {
+    const between = text.slice(last, off);
+    gaps.push(/[.!?…]/.test(between) ? 1 : /[,;:—–]/.test(between) || /\n/.test(between) ? 0.5 : 0);
+    words.push(m); last = off + m.length; return m;
+  });
+  return { words, gaps };
+}
+function karaokeStep(i, t) {
+  const tr = tracks[i], c = shown[i];
+  if (!S.t[i].karaoke || !c || !tr.wt || !tr.wt[c.id]) { if (kIdx[i] !== -1) { subEl[i].querySelectorAll(".w.now").forEach(w => w.classList.remove("now")); kIdx[i] = -1; } return; }
+  const shift = S.t[i].delay - (tr.wtDelay || 0);
+  const ws = tr.wt[c.id];
+  let k = -1;
+  for (let j = 0; j < ws.length; j++) { if (ws[j][0] + shift <= t + KARAOKE_LEAD) k = j; else break; }
+  if (k >= 0 && t > ws[k][1] + shift + 0.35) k = -1; // слово давно отзвучало — пауза
+  if (k === kIdx[i]) return;
+  kIdx[i] = k;
+  const spans = subEl[i].querySelectorAll(".w");
+  spans.forEach((w, j) => w.classList.toggle("now", j === k));
+}
+let wtTimers = [0, 0];
+function computeWordTimes(slot, delayMs = 400) {
+  clearTimeout(wtTimers[slot]);
+  wtTimers[slot] = setTimeout(async () => {
+    const tr = tracks[slot];
+    if (!S.t[slot].karaoke || !tr.cues.length || !film?.info?.audio?.length || !api.wordTimes) return;
+    const d = S.t[slot].delay;
+    const payload = tr.cues.map(c => ({ s: c.s + d, e: c.e + d, ...cueWords(c.text) }));
+    try {
+      const res = await api.wordTimes(film.path, audioN, payload);
+      if (tracks[slot] !== tr) return;
+      tr.wt = res; tr.wtDelay = d; kIdx[slot] = -1;
+    } catch (e) { console.warn("word times", e); }
+  }, delayMs);
 }
 
 /* ---------- транспорт ---------- */
@@ -518,6 +561,7 @@ async function loadCandidate(key) {
 }
 function setTrack(slot, key, name, cues, lang = "") {
   tracks[slot] = { key, name, cues, lang };
+  computeWordTimes(slot, 1500);
   syncState[slot] = "";
   S.t[slot].delay = 0; save();
   shown = [null, null]; renderTranscript(); renderLook(); tick(true);
@@ -573,14 +617,14 @@ function applySync(slot, r, silent) {
   const tr = tracks[slot];
   tr.orig = tr.orig || tr.cues.map(c => ({ ...c }));
   tr.cues = tr.orig.map((c, i) => ({ ...c, s: c.s * r.scale, e: c.e * r.scale, id: i }));
-  tr.sync = r; S.t[slot].delay = r.offset; save();
+  tr.sync = r; S.t[slot].delay = r.offset; save(); tr.wt = null; computeWordTimes(slot, 100);
   syncState[slot] = "Подогнано: " + describeSync(r);
   shown = [null, null]; renderTranscript(); renderLook(); tick(true);
   if (!silent) toast(`Ряд ${slot + 1}: ${describeSync(r)}`);
 }
 function resetSync(slot) {
   const tr = tracks[slot]; if (!tr.orig) return;
-  tr.cues = tr.orig.map((c, i) => ({ ...c, id: i })); tr.orig = null; tr.sync = null;
+  tr.cues = tr.orig.map((c, i) => ({ ...c, id: i })); tr.orig = null; tr.sync = null; tr.wt = null; computeWordTimes(slot, 100);
   S.t[slot].delay = 0; save(); syncState[slot] = "";
   shown = [null, null]; renderTranscript(); renderLook(); tick(true);
 }
@@ -761,6 +805,7 @@ function trackSec(i) {
     ${f("Размер", `<input type="range" id="size${i}" min="2.5" max="9" step="0.1" value="${c.size}">`, c.size.toFixed(1))}
     <div class="fld"><span>Цвет</span><div class="sw">${COLORS.map(x => `<button style="background:${x}" data-col="${i}" data-v="${x}" aria-pressed="${x === c.color}" aria-label="Цвет ${x}"></button>`).join("")}<input type="color" id="col${i}" value="${c.color}" aria-label="Свой цвет"></div><span></span></div>
     <div class="fld"><span>Шрифт</span><select class="sel" id="font${i}"><option value="ui"${c.font === "ui" ? " selected" : ""}>Гротеск</option><option value="serif"${c.font === "serif" ? " selected" : ""}>С засечками</option><option value="mono"${c.font === "mono" ? " selected" : ""}>Моноширинный</option></select><label class="chk"><input type="checkbox" id="bold${i}" ${c.bold ? "checked" : ""}>Жирный</label></div>
+    <label class="chk"><input type="checkbox" id="kar${i}" ${c.karaoke ? "checked" : ""}> Подсвечивать произносимое слово</label>
     <div class="fld"><span>Фон</span><div class="seg">${[["none", "Нет"], ["shadow", "Тень"], ["box", "Плашка"]].map(([v, l]) => `<button data-bg="${i}" data-v="${v}" aria-pressed="${c.bg === v}">${l}</button>`).join("")}</div><span></span></div>
     ${c.bg === "box" ? f("Плотность", `<input type="range" id="op${i}" min="0.1" max="1" step="0.05" value="${c.bgOp}">`, Math.round(c.bgOp * 100) + "%") : ""}
     <div class="fld"><span>Положение</span><div class="seg">${[["bottom", "Снизу"], ["top", "Сверху"]].map(([v, l]) => `<button data-edge="${i}" data-v="${v}" aria-pressed="${c.edge === v}">${l}</button>`).join("")}</div><span></span></div>
@@ -841,6 +886,7 @@ pl.addEventListener("change", e => {
   const id = e.target.id; let m;
   if ((m = id.match(/^on(\d)$/))) upd(() => S.t[+m[1]].on = e.target.checked);
   else if ((m = id.match(/^bold(\d)$/))) upd(() => S.t[+m[1]].bold = e.target.checked, false);
+  else if ((m = id.match(/^kar(\d)$/))) { const i = +m[1]; upd(() => S.t[i].karaoke = e.target.checked, false); kIdx[i] = -1; if (e.target.checked && !tracks[i].wt) computeWordTimes(i, 50); }
   else if ((m = id.match(/^font(\d)$/))) upd(() => S.t[+m[1]].font = e.target.value, false);
   else if ((m = id.match(/^col(\d)$/))) renderLook();
   else if (id === "hp") upd(() => S.hoverPause = e.target.checked, false);

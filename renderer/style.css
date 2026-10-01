@@ -252,3 +252,9 @@ body.fs #player{border:0;border-radius:0}
 body.remote .ib svg{width:22px;height:22px}
 body.remote .ib{padding:8px 10px}
 body.remote .sub .w{padding:0 .04em}
+
+/* ===== подсветка произносимого слова (мягкая) ===== */
+.sub .w{transition:background .12s ease, box-shadow .12s ease}
+.sub .w.now{background:rgba(255,255,255,.16);box-shadow:0 0 0 .06em rgba(255,255,255,.16)}
+.sub .w.now.pick{background:var(--accent)}
+@media (prefers-reduced-motion:reduce){.sub .w{transition:none}}

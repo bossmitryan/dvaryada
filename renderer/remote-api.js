@@ -54,6 +54,7 @@
     syncWarm: (p, a) => call("syncWarm", p, a),
     syncAudio: (p, a, c) => call("syncAudio", p, a, c),
     syncCues: (r, c) => call("syncCues", r, c),
+    wordTimes: (p, a, c) => call("wordTimes", p, a, c),
     getCfg: () => call("getCfg"),
     setCfg: patch => call("setCfg", patch),
     osLogin: async () => { throw new Error("Вход настраивается на ПК"); },

@@ -10,6 +10,7 @@ const { OpenSubs } = require("./lib/opensubs");
 const { SubDL } = require("./lib/subdl");
 const tr = require("./lib/translate");
 const sync = require("./lib/sync");
+const words = require("./lib/words");
 const updater = require("./lib/update");
 const library = require("./lib/library");
 const { createRemote } = require("./lib/remote");
@@ -60,6 +61,7 @@ const H = {
   async syncWarm(file, audioN) { sync.speechFeature(file, audioN).catch(() => {}); return true; },
   syncAudio: (file, audioN, cues) => sync.alignToAudio(file, audioN, cues),
   async syncCues(ref, cues) { return sync.alignToCues(ref, cues); },
+  wordTimes: (file, audioN, cues) => words.wordTimes(file, audioN, cues),
   async seekPlan(file, t, copyVideo) {
     if (t <= 0.3) return { ss: 0, offset: 0 };
     if (!copyVideo) return { ss: t, offset: t };
@@ -123,6 +125,7 @@ const remoteHandlers = {
   syncWarm: (f, a) => H.syncWarm(needLib(f), a),
   syncAudio: (f, a, c) => H.syncAudio(needLib(f), a, c),
   syncCues: H.syncCues,
+  wordTimes: (f, a, c) => H.wordTimes(needLib(f), a, c),
   seekPlan: (f, t, c) => H.seekPlan(needLib(f), t, c),
   extractSub: (f, n, c) => H.extractSub(needLib(f), n, c),
   siblingSubs: f => H.siblingSubs(needLib(f)),
@@ -138,6 +141,10 @@ const remoteHandlers = {
 /* ---------- APK для планшета: собирается на GitHub, ПК держит копию и раздаёт по сети ---------- */
 const APK_URL = "https://github.com/bossmitryan/dvaryada/releases/download/android-latest/DvaRyada.apk";
 async function apkFile() {
+  // 1) APK, который приезжает вместе с обновлением программы (папка android-dist)
+  const bundled = path.join(__dirname, "android-dist", "DvaRyada.apk");
+  if (fs.existsSync(bundled) && fs.statSync(bundled).size > 100000) return bundled;
+  // 2) скачанная копия или загрузка с GitHub
   const f = path.join(app.getPath("userData"), "DvaRyada.apk");
   const fresh = fs.existsSync(f) && Date.now() - fs.statSync(f).mtimeMs < 30 * 60 * 1000;
   if (fresh) return f;
@@ -221,7 +228,7 @@ const wrap = fn => async (_e, ...a) => {
   catch (e) { return { ok: false, error: e.message || String(e), code: e.code || "" }; }
 };
 const CHANNELS = {
-  "media:open": "openMedia", "media:hash": "hash", "sync:warm": "syncWarm", "sync:audio": "syncAudio", "sync:cues": "syncCues",
+  "media:open": "openMedia", "media:hash": "hash", "sync:warm": "syncWarm", "sync:audio": "syncAudio", "sync:cues": "syncCues", "words:times": "wordTimes",
   "media:seekPlan": "seekPlan", "media:extractSub": "extractSub", "media:siblingSubs": "siblingSubs", "file:read": "readFile",
   "cfg:get": "getCfg", "cfg:set": "setCfg", "os:login": "osLogin", "os:guess": "osGuess", "os:search": "osSearch", "os:download": "osDownload",
   "sd:search": "sdSearch", "sd:download": "sdDownload", "tr:word": "trWord", "tr:lines": "trLines", "app:version": "appVersion"

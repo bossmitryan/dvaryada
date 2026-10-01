@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("api", {
   syncWarm: (p, a) => call("sync:warm", p, a),
   syncAudio: (p, a, cues) => call("sync:audio", p, a, cues),
   syncCues: (ref, cues) => call("sync:cues", ref, cues),
+  wordTimes: (p, a, cues) => call("words:times", p, a, cues),
   getCfg: () => call("cfg:get"),
   setCfg: patch => call("cfg:set", patch),
   osLogin: () => call("os:login"),
